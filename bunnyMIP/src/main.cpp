@@ -80,8 +80,19 @@ int main(int argc, char* argv[]) {
             return argv[++i];
         };
 
-        if      (arg == "--threshold") threshold = (uint16_t)std::atoi(value("--threshold"));
-        else if (arg == "--sigma")     sigma     = (float)std::atof(value("--sigma"));
+        if (arg == "--threshold") {
+            long t = std::atol(value("--threshold"));
+            if (t < 0 || t > 65535) {
+                print("warning: --threshold %ld out of [0,65535]; clamping\n", t);
+                t = (t < 0) ? 0 : 65535;
+            }
+            threshold = (uint16_t)t;
+        }
+        else if (arg == "--sigma") {
+            sigma = (float)std::atof(value("--sigma"));
+            if (sigma <= 0.0f)
+                print("warning: --sigma should be > 0 (got %.3f); blur weights may be invalid\n", sigma);
+        }
         else if (arg == "--roll")      roll      = (float)std::atof(value("--roll"));
         else if (arg == "--pitch")     pitch     = (float)std::atof(value("--pitch"));
         else if (arg == "--yaw")       yaw       = (float)std::atof(value("--yaw"));
@@ -126,5 +137,7 @@ int main(int argc, char* argv[]) {
     savePGM16("output/bunnyMIP_gpu.pgm", d_raster, kBunnySize, kBunnySize);
 
     delete [] volume;
+    delete [] h_raster;
+    delete [] d_raster;
     return 0;
 }

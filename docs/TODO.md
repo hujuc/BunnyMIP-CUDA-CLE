@@ -26,14 +26,20 @@
 
 ---
 
-## 1. Understand the sequential base code (`src/bunnyMIP`)
+## 1. Understand the sequential base code (`src/bunnyMIP`) — ✅ DONE (2026-05-30)
 
-- [ ] Study how the volume is loaded into memory (1D `uint16_t` array, `(x,y,z)` indexing).
-- [ ] Study the sequential implementation of:
-  - [ ] Thresholding (point operation).
-  - [ ] 3D Gaussian blur (3×3×3 stencil).
-  - [ ] Maximum Intensity Projection (MIP) with backward mapping.
-- [ ] Identify how the host "Gold Standard" image is generated (for validation).
+Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
+
+- [x] Study how the volume is loaded into memory (1D `uint16_t` array, `(x,y,z)` indexing).
+  → 512×512×361 `uint16` (~180 MiB), `idx = z*N*N + y*N + x` (x contiguous); slices read from `data/1..361`.
+- [x] Study the sequential implementation of:
+  - [x] Thresholding (point operation) — in-place `if (v < threshold) v = 0`.
+  - [x] 3D Gaussian blur (3×3×3 stencil) — `exp(-d²/2σ²)` weights, normalized, clamped boundaries, out-of-place.
+  - [x] Maximum Intensity Projection (MIP) with backward mapping — ray per pixel, `R·(u,v,w)+offsets`, nearest-neighbor max over ~810 steps.
+- [x] Identify how the host "Gold Standard" image is generated (for validation).
+  → `host_bunny_mip` (threshold→blur→MIP); `main` counts pixels with `|cpu-gpu|>2`; PGM16 big-endian output.
+
+**Key gotchas found** (detail in the analysis): `host_bunny_mip` ignores its `threshold`/`sigma` args (hardcodes `1<<15`, `1.0`); `d2r` uses `π/360` not `π/180`; sampling is nearest-neighbor with truncation; device+host must use identical params for the diff check to be meaningful.
 
 ---
 

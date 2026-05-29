@@ -142,11 +142,11 @@ void host_bunny_mip(const uint16_t* input, uint16_t threshold,
     // Step 1: Threshold
     print("  cpu: applying threshold\n");
     memcpy(h_volume, input, kBunnySize*kBunnySize*kBunnyN*sizeof(uint16_t));
-    apply_threshold(h_volume, (uint16_t)(1 << 15));
+    apply_threshold(h_volume, threshold);
 
     // Step 2: Gaussian Blur
     print("  cpu: applying filter\n");
-    gaussian_blur(h_volume, h_blured, 1.0);
+    gaussian_blur(h_volume, h_blured, sigma);
 
     // Step 3: MIP Projection
     print("  cpu: generating MIP\n");

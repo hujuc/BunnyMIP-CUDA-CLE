@@ -48,39 +48,44 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 > **All implementation work must be contained in `src/device-bunnyMIP.cu`.**
 > Write the kernel definitions, device (VRAM) memory allocation, and manage Host↔Device data transfers.
 
-### 2.1. Memory management and transfers
-- [ ] Allocate the volume in VRAM (device).
-- [ ] Transfer the volume Host → Device.
-- [ ] Transfer the result (MIP raster) Device → Host.
-- [ ] Free device memory (avoid leaving large allocations active when not debugging — server etiquette).
+### 2.1. Memory management and transfers — ✅ DONE (2026-05-30)
+- [x] Allocate the volume in VRAM (device) — `d_volume`, `d_blurred`, `d_raster`.
+- [x] Transfer the volume Host → Device.
+- [x] Transfer the result (MIP raster) Device → Host.
+- [x] Free device memory (avoid leaving large allocations active when not debugging — server etiquette).
+- [x] Extras: `CUDA_CHECK` error macro; `pick_best_device()` selects the GTX 1660 Ti (sm_75) over the GT 710. Validated on banana (compiles + runs clean; raster zero-filled until kernels exist).
 
-### 2.2. Kernel 1 — Thresholding (Point Operation)
-- [ ] Implement a kernel that sets `v = 0` for every voxel `v < threshold`.
-- [ ] Parameterize via the `--threshold` argument.
+### 2.2. Kernel 1 — Thresholding (Point Operation) — ✅ DONE (2026-05-30)
+- [x] Implement a kernel that sets `v = 0` for every voxel `v < threshold` (`threshold_kernel`, grid-stride).
+- [x] Parameterize via the `threshold` argument (CLI wiring is §3).
 
-### 2.3. Kernel 2 — 3D Gaussian Blur (Stencil Operation)
-- [ ] Implement the spatial convolution: each voxel = weighted average of its 3×3×3 neighborhood.
-- [ ] Compute the Gaussian weights from `--sigma`.
-- [ ] Handle the volume boundaries correctly (boundary handling).
-- [ ] (Consider using shared memory / constant memory for the weights — see optimizations.)
+### 2.3. Kernel 2 — 3D Gaussian Blur (Stencil Operation) — ✅ DONE (2026-05-30)
+- [x] Implement the spatial convolution: each voxel = weighted average of its 3×3×3 neighborhood (`blur_kernel`, 8×8×8 blocks, out-of-place).
+- [x] Compute the Gaussian weights from `sigma` (same math as the host).
+- [x] Handle the volume boundaries correctly (clamp, like the host).
+- [x] Use **constant memory** for the 27 weights (`c_weights`). Shared-memory tiling left as a §5 optimization.
 
-### 2.4. Kernel 3 — Maximum Intensity Projection (MIP)
-- [ ] Implement the projection: for each screen pixel, find the maximum voxel intensity along the corresponding parallel ray.
-- [ ] Build the 3×3 rotation matrix `R` from `--roll`, `--pitch`, `--yaw` (degrees).
-- [ ] Use `R` for backward mapping (map each pixel/ray back into the volume).
-- [ ] Update the kernels at runtime according to the received parameters.
+### 2.4. Kernel 3 — Maximum Intensity Projection (MIP) — ✅ DONE (2026-05-30)
+- [x] Implement the projection: for each screen pixel, max voxel intensity along the ray (`mip_kernel`, 16×16 blocks, `__ldg`).
+- [x] Build the 3×3 rotation matrix `R` from `--roll`, `--pitch`, `--yaw` (degrees) — done via the CLI (§3); kernel consumes `R`.
+- [x] Use `R` (constant memory `c_R`) for backward mapping (map each pixel/ray back into the volume).
+- [x] Kernels parameterized at runtime by `threshold`/`sigma`/`R` (driven by the CLI in §3).
+
+**Result:** full GPU pipeline matches the host gold standard — **`Output difference: 0.00%`**. Required `-arch=sm_75` in the makefile (for `__ldg` / Turing codegen).
 
 ---
 
-## 3. Command Line Interface (CLI)
+## 3. Command Line Interface (CLI) — ✅ DONE (2026-05-30)
 
-- [ ] Parse and accept the parameters:
-  - [ ] `--threshold` — intensity floor (voxel `< threshold` → 0).
-  - [ ] `--sigma` — standard deviation (σ) for the Gaussian weights.
-  - [ ] `--roll` — rotation in degrees.
-  - [ ] `--pitch` — rotation in degrees.
-  - [ ] `--yaw` — rotation in degrees.
-- [ ] Ensure these parameters actually drive the final render at runtime.
+- [x] Parse and accept the parameters (in `main.cpp`):
+  - [x] `--threshold` — intensity floor (voxel `< threshold` → 0).
+  - [x] `--sigma` — standard deviation (σ) for the Gaussian weights.
+  - [x] `--roll` — rotation in degrees.
+  - [x] `--pitch` — rotation in degrees.
+  - [x] `--yaw` — rotation in degrees.
+- [x] Ensure these parameters actually drive the final render at runtime (defaults match the old hardcoded values; `--help`; invalid-option handling).
+- [x] Fixed `host_bunny_mip` to use its `threshold`/`sigma` args (was hardcoded) so host and device stay consistent → diff stays **0.00%** for all params.
+- [x] Side fixes: `d2r` corrected to `π/180` (was `π/360`, half-angle); diff metric in `main.cpp` corrected to `abs(h - d)` (was `abs(h) - d`).
 
 ---
 

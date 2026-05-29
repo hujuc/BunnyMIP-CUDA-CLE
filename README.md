@@ -46,6 +46,4 @@ bash scripts/build-run.sh [--threshold N --sigma S --roll R --pitch P --yaw Y]
 
 ## Status
 
-Setup done (point 0). To implement: the CUDA kernels in
-`bunnyMIP/src/device-bunnyMIP.cu` (currently a stub) and CLI parsing. Details and
-next steps in [docs/TODO.md](docs/TODO.md).
+Next steps in [docs/TODO.md](docs/TODO.md).

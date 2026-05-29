@@ -5,7 +5,9 @@ CXX      := nvcc
 # CXXFLAGS: General compiler flags
 # DEPFLAGS: Specifically for dependency generation
 # LDFLAGS:  Specifically for the linking phase
-CXXFLAGS := -Iinclude -O3
+# -arch=sm_75 targets the GeForce GTX 1660 Ti (Turing) on the server and enables
+# features such as __ldg. Change it if building for a different GPU.
+CXXFLAGS := -Iinclude -O3 -arch=sm_75
 DEPFLAGS = -MMD
 
 TARGET   := bunnyMIP

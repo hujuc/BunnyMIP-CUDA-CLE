@@ -19,8 +19,11 @@ FFMPEG="$VIZ/ffmpeg"
 FRAMES="output/frame_%03d.pgm"
 VIDEO="output/bunny-spin.mp4"
 
-# Build estatico (linux64, gpl -> tem libx264, sem root). Cacheado em viz/.
-FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+# Build TOTALMENTE estatico (John Van Sickle): inclui glibc, por isso corre na
+# banana (glibc 2.27). Tem libx264 (H.264), sem root. Cacheado em viz/ffmpeg.
+# NB: builds "static" do BtbN ligam glibc dinamicamente e exigem >= 2.28 -> NAO
+# correm na banana; por isso usamos esta fonte.
+FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
 
 # --- 1. Garantir o ffmpeg estatico em viz/ (so na 1a vez) -------------------
 if [ ! -x "$FFMPEG" ]; then
@@ -30,9 +33,10 @@ if [ ! -x "$FFMPEG" ]; then
   tmp="$VIZ/.dl"
   rm -rf "$tmp"; mkdir -p "$tmp"
   wget -q -O "$tmp/ffmpeg.tar.xz" "$FFMPEG_URL"
+  # Layout Van Sickle: ffmpeg-*-amd64-static/ffmpeg (binario no topo, sem bin/).
   tar -xf "$tmp/ffmpeg.tar.xz" -C "$tmp" \
-    --wildcards --no-anchored 'bin/ffmpeg'
-  cp "$tmp"/ffmpeg-*-linux64-gpl/bin/ffmpeg "$FFMPEG"
+    --wildcards --no-anchored 'ffmpeg-*-amd64-static/ffmpeg'
+  cp "$tmp"/ffmpeg-*-amd64-static/ffmpeg "$FFMPEG"
   chmod +x "$FFMPEG"
   rm -rf "$tmp"
   echo "==> ffmpeg instalado em $FFMPEG"

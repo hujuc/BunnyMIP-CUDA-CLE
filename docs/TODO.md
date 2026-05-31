@@ -133,7 +133,7 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 - [x] Usage details and a summary of the approach (§1 CLI + §2 pipeline overview).
 - [x] Any other information the group considers relevant (§7 transparency note on reference-code fixes).
 - [x] Technical documentation quality (5%) — structured, cross-linked, data-backed.
-- [x] **IEEE-format citations** for external code/concepts (§9: CUDA Guide, Stanford Bunny/Turk&Levoy, MIP/Wallis et al.).
+- [x] **IEEE-format citations** for external code/concepts (README §10): CUDA Guide [1], Stanford Bunny/Turk&Levoy [2], MIP/Wallis [3], grid-stride loop/Harris [4], CUDA Samples device-pick [5], ffmpeg [6]. Provenance headers added to `device-bunnyMIP.cu` and `main.cpp` (original work vs base code) + inline `[4]/[5]` cite tags at the external idioms.
 
 > ⚠️ Pending when the §6 innovation feature lands: add an N-MIP / video section to the README and cite `ffmpeg` if used.
 

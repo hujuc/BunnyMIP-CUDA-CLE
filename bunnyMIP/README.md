@@ -320,7 +320,17 @@ Helper scripts (in [`../scripts/`](../scripts/)): `sync-up.sh` (push code to ban
     display in nuclear medicine," *IEEE Trans. Med. Imaging*, vol. 8, no. 4,
     pp. 297–303, Dec. 1989. (Maximum Intensity Projection.)
 
-[4] FFmpeg Project, *FFmpeg: A complete, cross-platform solution to record, convert
+[4] M. Harris, "CUDA Pro Tip: Write Flexible Kernels with Grid-Stride Loops,"
+    NVIDIA Developer Blog, 2013. [Online]. Available:
+    https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/
+    (Grid-stride loop pattern in `threshold_kernel`.)
+
+[5] NVIDIA Corporation, *CUDA Samples* — `Common/helper_cuda.h`
+    (`gpuGetMaxGflopsDeviceId`), NVIDIA. [Online]. Available:
+    https://github.com/NVIDIA/cuda-samples (Inspiration for the "pick the best
+    GPU" heuristic in `pick_best_device`.)
+
+[6] FFmpeg Project, *FFmpeg: A complete, cross-platform solution to record, convert
     and stream audio and video*. [Online]. Available: https://ffmpeg.org/
     Static Linux build (GPL) by J. Van Sickle, https://johnvansickle.com/ffmpeg/
 

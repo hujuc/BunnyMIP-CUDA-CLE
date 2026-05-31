@@ -1,3 +1,19 @@
+// =============================================================================
+// device-bunnyMIP.cu - CUDA port of the volumetric MIP pipeline (Group cle08).
+//
+// All code in this file is the group's original work. It implements the four
+// device kernels (threshold, 3x3x3 blur, MIP, multi-MIP), the read-only constant
+// uploads, GPU selection, and the Host<->Device memory management.
+//
+// External concepts/idioms used (cited per the academic-integrity policy; see the
+// numbered references in ../README.md, section "References"):
+//   - Grid-stride loop pattern in threshold_kernel ............... [4]
+//   - "Pick the best GPU" heuristic in pick_best_device() ........ [5] (CUDA Samples)
+//   - Constant memory + __ldg read-only cache + CUDA-event timing  [1] (CUDA Guide)
+// The Euler rotation matrix consumed by the MIP kernels is built by the provided
+// base code (generate_rotation_matrix in main.cpp), not in this file.
+// =============================================================================
+
 #include <cstdint>
 #include <cstdlib>
 #include <cmath>
@@ -42,7 +58,10 @@ __device__ __forceinline__ int clampi(int v, int lo, int hi)
 
 // =============================================================================
 // Kernel 1 - Thresholding (point operation).
-// Sets every voxel below `threshold` to 0. Grid-stride loop over the volume.
+// Sets every voxel below `threshold` to 0. Embarrassingly parallel: each voxel
+// is independent. Uses a grid-stride loop [4] so any launch configuration covers
+// the whole `n`-element volume (each thread handles indices i, i+stride, ...),
+// keeping global-memory accesses coalesced regardless of grid size.
 // =============================================================================
 __global__ void threshold_kernel(uint16_t* volume, size_t n, uint16_t threshold)
 {
@@ -55,8 +74,17 @@ __global__ void threshold_kernel(uint16_t* volume, size_t n, uint16_t threshold)
 
 // =============================================================================
 // Kernel 2 - 3D Gaussian blur (3x3x3 stencil).
-// One thread per voxel: weighted average of the 3x3x3 neighborhood (clamped
-// boundaries), out-of-place. Weights come from constant memory.
+// One thread per voxel, indexed from a 3D grid. Each thread computes the weighted
+// average of its 27-voxel (3x3x3) neighborhood and writes one output voxel.
+//   - Out-of-place (input != output): neighbours are read from the unmodified
+//     input, so there is no read-after-write hazard between threads.
+//   - Boundary voxels clamp their neighbour coordinates (clampi), matching the
+//     host reference exactly so the result is bit-identical.
+//   - The 27 weights live in constant memory (c_weights): every thread reads the
+//     same values, broadcast from the constant cache in a single transaction.
+//   - `__restrict__` promises input/output do not alias, enabling the compiler to
+//     keep the running accumulator in a register.
+// The (uint16_t) store truncates toward zero, identical to the host's cast.
 // =============================================================================
 __global__ void blur_kernel(const uint16_t* __restrict__ input,
                             uint16_t* __restrict__ output, int N, int M)
@@ -64,7 +92,7 @@ __global__ void blur_kernel(const uint16_t* __restrict__ input,
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z * blockDim.z + threadIdx.z;
-    if (x >= N || y >= N || z >= M) return;
+    if (x >= N || y >= N || z >= M) return;   // guard the ragged edge of the grid
 
     float acc = 0.0f;
     for (int dz = -1; dz <= 1; ++dz) {
@@ -83,8 +111,13 @@ __global__ void blur_kernel(const uint16_t* __restrict__ input,
 
 // =============================================================================
 // Kernel 3 - Maximum Intensity Projection (MIP).
-// One thread per output pixel: cast a ray (rotated by c_R) through the volume
-// and keep the maximum voxel intensity (nearest-neighbor sampling).
+// One thread per OUTPUT pixel (x,y). The thread walks a single ray through the
+// volume and keeps the largest voxel intensity it crosses (the "maximum intensity
+// projection"). The reduction is private to the thread, so no atomics or
+// synchronisation are needed. Backward mapping: the screen point (u,v,w) is
+// rotated by c_R into volume space, sampled with nearest-neighbor (the (int)
+// truncation), and bounds-checked. Volume reads go through the read-only data
+// cache via __ldg, since the volume is never written by this kernel.
 // =============================================================================
 __global__ void mip_kernel(const uint16_t* __restrict__ volume,
                            uint16_t* __restrict__ image, int N, int M, int ray_range)
@@ -93,10 +126,12 @@ __global__ void mip_kernel(const uint16_t* __restrict__ volume,
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= N || y >= N) return;
 
-    // Centered screen coordinates.
+    // Center the screen coordinates on the volume's mid-plane.
     float u = x - N / 2.0f;
     float v = y - N / 2.0f;
 
+    // Step the ray across the full half-diagonal so it traverses the volume at
+    // any rotation; keep the running maximum of the sampled voxels.
     uint16_t maxIntensity = 0;
     for (int step = -ray_range; step < ray_range; ++step) {
         float w = (float)step;
@@ -179,8 +214,11 @@ static void upload_gaussian_weights(float sigma)
 }
 
 // =============================================================================
-// Pick the most capable GPU (the server has two: GT 710 and GTX 1660).
-// Prefers higher compute capability, then more streaming multiprocessors.
+// Pick the most capable GPU (banana has two: GT 710 sm_35 and GTX 1660 sm_75).
+// Heuristic: prefer higher compute capability, then more streaming
+// multiprocessors. Same idea as the gpuGetMaxGflopsDeviceId helper shipped with
+// the CUDA Samples [5]; here simplified to (major, minor, #SM) so we always land
+// on the GTX 1660 Ti rather than the weak secondary GPU.
 // =============================================================================
 static int pick_best_device()
 {

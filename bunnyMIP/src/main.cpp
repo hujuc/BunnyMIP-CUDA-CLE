@@ -1,3 +1,13 @@
+// =============================================================================
+// main.cpp - CLI, pipeline driver, speedup benchmark and validation (cle08).
+//
+// Provenance:
+//   - generate_rotation_matrix() and d2r() are from the provided base code
+//     (instructor-supplied). The group only fixed d2r (pi/360 -> pi/180, see
+//     below) and the loop bounds; the Euler-matrix math itself is unchanged.
+//   - The CLI parsing, the timed benchmark loop, the validation block and the
+//     multi-MIP (Innovation #1) driver are the group's original work.
+// =============================================================================
 
 #include <chrono>
 #include <cmath>
@@ -19,6 +29,9 @@
 // pi/360 (half the angle); corrected here so the CLI angles mean real degrees.
 inline float d2r(float angle) { return angle * M_PI / 180.0f; }
 
+// [BASE CODE] Build the flattened 3x3 rotation matrix R = Rz*Ry*Rx from the
+// pitch/yaw/roll angles (radians). `inverse` transposes it for backward mapping.
+// Provided with the assignment; consumed by the MIP kernels.
 void generate_rotation_matrix(float pitch, float yaw, float roll, float* R, bool inverse = false) {
     float cp = std::cos(pitch); float sp = std::sin(pitch);
     float cy = std::cos(yaw);   float sy = std::sin(yaw);

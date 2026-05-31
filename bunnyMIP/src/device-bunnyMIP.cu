@@ -167,7 +167,8 @@ static int pick_best_device()
 // the resulting raster, and free everything.
 // =============================================================================
 void device_bunny_mip(const uint16_t* input, uint16_t threshold,
-        float sigma, const float* R, uint16_t* output)
+        float sigma, const float* R, uint16_t* output,
+        float* kernels_ms)
 {
     print("Running functions on the GPU\n");
 
@@ -196,6 +197,13 @@ void device_bunny_mip(const uint16_t* input, uint16_t threshold,
 
     // Host -> Device: upload the CT volume.
     CUDA_CHECK(cudaMemcpy(d_volume, input, volBytes, cudaMemcpyHostToDevice));
+
+    // Kernels-only timing: bracket the 3 kernels with CUDA events (excludes the
+    // allocations and the H2D/D2H transfers above/below).
+    cudaEvent_t ev_start, ev_stop;
+    CUDA_CHECK(cudaEventCreate(&ev_start));
+    CUDA_CHECK(cudaEventCreate(&ev_stop));
+    CUDA_CHECK(cudaEventRecord(ev_start));
 
     // Step 1: Threshold (in-place on d_volume).
     print("  gpu: applying threshold\n");
@@ -228,8 +236,18 @@ void device_bunny_mip(const uint16_t* input, uint16_t threshold,
         CUDA_CHECK(cudaGetLastError());
     }
 
+    // Close the kernels-only timing window (after the last kernel, before D2H).
+    CUDA_CHECK(cudaEventRecord(ev_stop));
+
     // Wait for the GPU and surface any asynchronous kernel error.
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Report the kernels-only elapsed time to the caller, if requested.
+    if (kernels_ms) {
+        CUDA_CHECK(cudaEventElapsedTime(kernels_ms, ev_start, ev_stop));
+    }
+    CUDA_CHECK(cudaEventDestroy(ev_start));
+    CUDA_CHECK(cudaEventDestroy(ev_stop));
 
     // Device -> Host: download the resulting raster.
     CUDA_CHECK(cudaMemcpy(output, d_raster, rasterBytes, cudaMemcpyDeviceToHost));

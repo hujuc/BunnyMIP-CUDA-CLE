@@ -51,6 +51,16 @@ void generate_rotation_matrix(float pitch, float yaw, float roll, float* R, bool
     }
 }
 
+// C = A * B for flattened 3x3 matrices (row-major). Used by the multi-MIP
+// turntable to compose a fixed tilt with the per-frame spin (R = R_tilt*R_spin).
+static void matmul3(const float* A, const float* B, float* C) {
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            C[i * 3 + j] = A[i * 3 + 0] * B[0 * 3 + j]
+                         + A[i * 3 + 1] * B[1 * 3 + j]
+                         + A[i * 3 + 2] * B[2 * 3 + j];
+}
+
 static void usage(const char* prog) {
     print("Usage: %s [options]\n", prog);
     print("  --threshold N   intensity floor; voxels < N are set to 0 (default 32768)\n");
@@ -61,8 +71,10 @@ static void usage(const char* prog) {
     print("  --repeat N      timed CPU/GPU runs for the speedup analysis (default 1;\n");
     print("                  the first run is discarded as warm-up when N > 1)\n");
     print("  --frames N      render N MIPs with different rotations in ONE CUDA kernel\n");
-    print("                  call; sweeps 0..360 deg on the axis whose --roll/--pitch/\n");
-    print("                  --yaw is nonzero (default yaw). Writes output/frame_XXX.pgm\n");
+    print("                  call, sweeping 0..360 deg about --axis. The --roll/--pitch/\n");
+    print("                  --yaw values on the OTHER two axes set a fixed tilt (orbit).\n");
+    print("                  Writes output/frame_XXX.pgm\n");
+    print("  --axis A        multi-MIP spin axis: roll|pitch|yaw (default yaw)\n");
     print("  -h, --help      show this help and exit\n");
 }
 
@@ -77,6 +89,7 @@ int main(int argc, char* argv[]) {
     float    yaw       = 0.0f;
     int      repeat    = 1;          // timed runs for the speedup analysis
     int      frames    = 1;          // >1 -> multi-MIP: N rotations, 1 kernel call
+    std::string spin_axis = "yaw";   // multi-MIP: which axis sweeps 0..360
 
     // ---- Parse the command line --------------------------------------------
     for (int i = 1; i < argc; ++i) {
@@ -114,6 +127,14 @@ int main(int argc, char* argv[]) {
             frames = std::atoi(value("--frames"));
             if (frames < 1) { print("warning: --frames must be >= 1; using 1\n"); frames = 1; }
         }
+        else if (arg == "--axis") {
+            spin_axis = value("--axis");
+            if (spin_axis != "roll" && spin_axis != "pitch" && spin_axis != "yaw") {
+                print("warning: --axis must be roll|pitch|yaw (got '%s'); using yaw\n",
+                      spin_axis.c_str());
+                spin_axis = "yaw";
+            }
+        }
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else {
             print("error: unknown option '%s'\n", arg.c_str());
@@ -129,22 +150,33 @@ int main(int argc, char* argv[]) {
 
     // ---- Multi-MIP mode (Innovation #1): N rotations, single kernel call -----
     if (frames > 1) {
-        // Pick the spin axis: whichever of roll/pitch/yaw is nonzero (yaw default).
-        const char* axis = "yaw";
-        if      (roll  != 0.0f) axis = "roll";
-        else if (pitch != 0.0f) axis = "pitch";
-        print("multi-MIP: %d frames, sweeping %s 0..360 deg in one kernel call\n",
-              frames, axis);
+        // --axis selects which axis sweeps 0..360 (the "spin"). The roll/pitch/yaw
+        // CLI values on the OTHER two axes define a fixed tilt that orients the
+        // spin axis, giving a tilted orbit (not just a flat turntable):
+        //   R_frame(f) = R_tilt * R_spin(f),  R_spin sweeps 0..360 about the axis.
+        const char axis = spin_axis[0];   // 'r', 'p', or 'y'
 
-        // Build N rotation matrices: frame f sets the chosen axis to f*360/N deg.
+        // Fixed tilt from the two non-spin angles (the spin axis contributes 0).
+        float tilt_roll  = (axis == 'r') ? 0.0f : roll;
+        float tilt_pitch = (axis == 'p') ? 0.0f : pitch;
+        float tilt_yaw   = (axis == 'y') ? 0.0f : yaw;
+        float R_tilt[9];
+        generate_rotation_matrix(d2r(tilt_pitch), d2r(tilt_yaw), d2r(tilt_roll), R_tilt);
+
+        print("multi-MIP: %d frames, spin %s 0..360 deg; tilt(r=%.1f p=%.1f y=%.1f), 1 kernel call\n",
+              frames, spin_axis.c_str(), tilt_roll, tilt_pitch, tilt_yaw);
+
+        // Build N matrices: R_frame = R_tilt * R_spin(f*360/N about the spin axis).
         const int raster = kBunnySize * kBunnySize;
         float* Rs = new float[(size_t)frames * 9];
         for (int f = 0; f < frames; ++f) {
             float ang = f * (360.0f / frames);
-            float rr = (axis[0] == 'r') ? ang : 0.0f;
-            float pp = (axis[0] == 'p') ? ang : 0.0f;
-            float yy = (axis[0] == 'y') ? ang : 0.0f;
-            generate_rotation_matrix(d2r(pp), d2r(yy), d2r(rr), Rs + (size_t)f * 9);
+            float rr = (axis == 'r') ? ang : 0.0f;
+            float pp = (axis == 'p') ? ang : 0.0f;
+            float yy = (axis == 'y') ? ang : 0.0f;
+            float R_spin[9];
+            generate_rotation_matrix(d2r(pp), d2r(yy), d2r(rr), R_spin);
+            matmul3(R_tilt, R_spin, Rs + (size_t)f * 9);
         }
 
         uint16_t* allframes = new uint16_t[(size_t)raster * frames];

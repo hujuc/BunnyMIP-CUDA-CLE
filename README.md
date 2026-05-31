@@ -43,8 +43,10 @@ bash scripts/sync-down.sh
 # 5) speedup analysis: sweeps sigma/rotations, writes output/perf-results.txt
 bash scripts/bench.sh [REPEAT]            # REPEAT default = 10
 
-# 6) spinning-bunny video: N MIPs in one kernel call -> bunny-spin.mp4
-bash scripts/make-video.sh --frames 120 --fps 30
+# 6) spinning-bunny video: N MIPs in ONE kernel call (Innovation) -> bunny-spin.mp4
+#    --axis picks the spin axis; --tilt-* tilt it into an orbit
+bash scripts/make-video.sh --frames 120 --fps 30 --axis yaw
+bash scripts/make-video.sh --frames 120 --fps 30 --axis yaw --tilt-pitch 30   # tilted orbit
 ```
 
 | Script | Purpose |

@@ -89,21 +89,27 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 
 ---
 
-## 4. Validation and correctness
+## 4. Validation and correctness — ✅ DONE (2026-05-31, branch `dev/luis`)
 
-- [ ] Implement the validation check: compare the raster produced by the CUDA kernels against the host "Gold Standard" image.
-- [ ] Ensure the device MIP **does not differ significantly** from the host-computed version.
-- [ ] Define the comparison metric/tolerance and report the validation result.
+- [x] Implement the validation check: compare the raster produced by the CUDA kernels against the host "Gold Standard" image (in [main.cpp](../bunnyMIP/src/main.cpp)).
+- [x] Ensure the device MIP **does not differ significantly** from the host-computed version → **PASS** in every benchmarked config (see §5).
+- [x] Define the comparison metric/tolerance and report the validation result.
+  → metric: % of pixels with `|cpu-gpu| > PIXEL_TOL` (`PIXEL_TOL = 2`); also tracks the max abs diff. Passes if that % `≤ ACCEPT_PCT` (`1.0%`). Prints `PASS/FAIL`; `main` returns non-zero on FAIL (scriptable).
+
+**Verified correct (port reviewed kernel-by-kernel against the host reference):**
+- Threshold, blur (weights/indexing/clamp/accumulation order/`(uint16_t)` truncation) and MIP (`ray_range`=405, `R`, offsets, nearest-neighbor truncation) are a **faithful, bit-stable port** → observed diff **0.00%**, max abs diff 0.
+- ⚠️ **To document in the README (transparency / academic integrity):** (a) work is not 100% confined to `device-bunnyMIP.cu` — `main.cpp` was necessarily edited for the CLI (§3) and the benchmark/validation harness; (b) the team fixed real bugs in the *reference* code (host ignored its `threshold`/`sigma`; `d2r` was π/360; broken diff metric) so the "Gold Standard" is the corrected sequential version. Both deviations are defensible but must be stated.
 
 ---
 
-## 5. Performance evaluation — Speedup Analysis
+## 5. Performance evaluation — Speedup Analysis — ✅ DONE (2026-05-31, branch `dev/luis`)
 
-- [ ] Measure the execution time of the sequential version (CPU reference).
-- [ ] Measure the execution time of the CUDA version (GPU).
-- [ ] Compute the speedup and demonstrate a measurable performance gain.
-- [ ] Collect profiling results obtained **on the `banana.ua.pt` server**.
-- [ ] Save the performance-analysis results (time comparisons + speedup calculations) for the report/README.
+- [x] Measure the execution time of the sequential version (CPU reference) — `std::chrono` wall-clock in [main.cpp](../bunnyMIP/src/main.cpp).
+- [x] Measure the execution time of the CUDA version (GPU) — two figures: **end-to-end** (`std::chrono`, incl. malloc + H2D/D2H + free) and **kernels-only** (`cudaEvent`, via the new `kernels_ms` out-param in `device_bunny_mip`).
+- [x] Compute the speedup and demonstrate a measurable performance gain → **~93–165× end-to-end**, **~143–287× kernels-only**.
+- [x] Collect profiling results obtained **on the `banana.ua.pt` server** (GeForce GTX 1660 Ti, sm_75) via [scripts/bench.sh](../scripts/bench.sh) (sigma sweep + rotation sweep; `--repeat`, first run discarded as CUDA warm-up; avg+min reported).
+- [x] Save the performance-analysis results (time comparisons + speedup calculations) for the report/README → [output/perf-results.txt](../output/perf-results.txt) (Markdown tables ready for the README).
+- [x] Added [scripts/sync-down.sh](../scripts/sync-down.sh) to pull results (`output/*.pgm`) banana → local.
 
 ---
 

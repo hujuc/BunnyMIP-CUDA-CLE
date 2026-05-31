@@ -28,6 +28,12 @@
 __constant__ float c_weights[27];
 __constant__ float c_R[9];
 
+// Innovation #1: up to MAX_FRAMES rotation matrices for the multi-MIP kernel,
+// stored back-to-back (matrix f at c_Rmulti + f*9). Constant memory is 64 KB;
+// 512 * 9 floats = 18 KB, leaving room for c_weights/c_R.
+#define MAX_FRAMES 512
+__constant__ float c_Rmulti[MAX_FRAMES * 9];
+
 // Clamp helper for the blur boundary handling (mirrors the host's max/min).
 __device__ __forceinline__ int clampi(int v, int lo, int hi)
 {
@@ -109,6 +115,48 @@ __global__ void mip_kernel(const uint16_t* __restrict__ volume,
         }
     }
     image[y * N + x] = maxIntensity;
+}
+
+// =============================================================================
+// Kernel 3b - Multi-MIP: N projections in ONE launch (Innovation #1).
+// The grid is 3D: (x, y, frame). Each thread renders pixel (x,y) of frame f
+// using rotation matrix c_Rmulti[f] and writes into that frame's slice of a
+// frames*N*N output buffer. The volume is shared by all frames.
+// =============================================================================
+__global__ void mip_multi_kernel(const uint16_t* __restrict__ volume,
+                                 uint16_t* __restrict__ images,
+                                 int N, int M, int ray_range, int frames)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int f = blockIdx.z * blockDim.z + threadIdx.z;   // frame index
+    if (x >= N || y >= N || f >= frames) return;
+
+    // This frame's rotation matrix (9 floats at offset f*9).
+    const float* R = c_Rmulti + f * 9;
+
+    float u = x - N / 2.0f;
+    float v = y - N / 2.0f;
+
+    uint16_t maxIntensity = 0;
+    for (int step = -ray_range; step < ray_range; ++step) {
+        float w = (float)step;
+
+        float rotX = R[0] * u + R[1] * v + R[2] * w + N / 2.0f;
+        float rotY = R[3] * u + R[4] * v + R[5] * w + N / 2.0f;
+        float rotZ = R[6] * u + R[7] * v + R[8] * w + M / 2.0f;
+
+        if (rotX >= 0 && rotX < N &&
+            rotY >= 0 && rotY < N &&
+            rotZ >= 0 && rotZ < M) {
+            size_t idx = (size_t)((int)rotZ * N * N + (int)rotY * N + (int)rotX);
+            uint16_t val = __ldg(&volume[idx]);
+            if (val > maxIntensity)
+                maxIntensity = val;
+        }
+    }
+    // Write into frame f's slice of the output buffer.
+    images[(size_t)f * N * N + y * N + x] = maxIntensity;
 }
 
 // Build the normalized 3x3x3 Gaussian weights on the host (identical math to the
@@ -256,4 +304,91 @@ void device_bunny_mip(const uint16_t* input, uint16_t threshold,
     CUDA_CHECK(cudaFree(d_volume));
     CUDA_CHECK(cudaFree(d_blurred));
     CUDA_CHECK(cudaFree(d_raster));
+}
+
+// =============================================================================
+// Innovation #1 entry point: threshold + blur once, then render `frames` MIP
+// images with different rotations in a SINGLE mip_multi_kernel launch.
+// =============================================================================
+void device_bunny_mip_multi(const uint16_t* input, uint16_t threshold,
+        float sigma, const float* Rs, int frames, uint16_t* output,
+        float* mip_ms)
+{
+    print("Running multi-MIP on the GPU (%d frames, single kernel call)\n", frames);
+
+    if (frames < 1) frames = 1;
+    if (frames > MAX_FRAMES) {
+        print("  gpu: frames clamped to MAX_FRAMES=%d\n", MAX_FRAMES);
+        frames = MAX_FRAMES;
+    }
+
+    const int    N           = kBunnySize;
+    const int    M           = kBunnyN;
+    const size_t volCount    = (size_t)N * N * M;
+    const size_t rasterCount = (size_t)N * N;
+    const size_t volBytes    = volCount    * sizeof(uint16_t);
+    const size_t outBytes    = rasterCount * (size_t)frames * sizeof(uint16_t);
+
+    CUDA_CHECK(cudaSetDevice(pick_best_device()));
+
+    // Upload read-only constants: Gaussian weights + all `frames` matrices.
+    upload_gaussian_weights(sigma);
+    CUDA_CHECK(cudaMemcpyToSymbol(c_Rmulti, Rs, (size_t)frames * 9 * sizeof(float)));
+
+    // Device buffers: volume, blurred volume, and the frames*N*N output stack.
+    uint16_t *d_volume = nullptr, *d_blurred = nullptr, *d_images = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_volume,  volBytes));
+    CUDA_CHECK(cudaMalloc(&d_blurred, volBytes));
+    CUDA_CHECK(cudaMalloc(&d_images,  outBytes));
+
+    CUDA_CHECK(cudaMemcpy(d_volume, input, volBytes, cudaMemcpyHostToDevice));
+
+    // Step 1: Threshold (in-place).
+    print("  gpu: applying threshold\n");
+    {
+        const int threads = 256;
+        const int blocks  = (int)((volCount + threads - 1) / threads);
+        threshold_kernel<<<blocks, threads>>>(d_volume, volCount, threshold);
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Step 2: Gaussian Blur (d_volume -> d_blurred), shared by all frames.
+    print("  gpu: applying filter\n");
+    {
+        dim3 block(8, 8, 8);
+        dim3 grid((N + block.x - 1) / block.x,
+                  (N + block.y - 1) / block.y,
+                  (M + block.z - 1) / block.z);
+        blur_kernel<<<grid, block>>>(d_volume, d_blurred, N, M);
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Step 3: Multi-MIP in ONE launch (3D grid: x, y, frame). Timed via events.
+    print("  gpu: generating %d MIPs in a single kernel call\n", frames);
+    cudaEvent_t ev_start, ev_stop;
+    CUDA_CHECK(cudaEventCreate(&ev_start));
+    CUDA_CHECK(cudaEventCreate(&ev_stop));
+    {
+        int ray_range = (int)(sqrt((double)N * N + (double)N * N + (double)M * M) / 2.0) + 1;
+        dim3 block(16, 16, 1);
+        dim3 grid((N + block.x - 1) / block.x,
+                  (N + block.y - 1) / block.y,
+                  (frames + block.z - 1) / block.z);   // one grid layer per frame
+        CUDA_CHECK(cudaEventRecord(ev_start));
+        mip_multi_kernel<<<grid, block>>>(d_blurred, d_images, N, M, ray_range, frames);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaEventRecord(ev_stop));
+    }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+    if (mip_ms) CUDA_CHECK(cudaEventElapsedTime(mip_ms, ev_start, ev_stop));
+    CUDA_CHECK(cudaEventDestroy(ev_start));
+    CUDA_CHECK(cudaEventDestroy(ev_stop));
+
+    // Download all frames at once.
+    CUDA_CHECK(cudaMemcpy(output, d_images, outBytes, cudaMemcpyDeviceToHost));
+
+    CUDA_CHECK(cudaFree(d_volume));
+    CUDA_CHECK(cudaFree(d_blurred));
+    CUDA_CHECK(cudaFree(d_images));
 }

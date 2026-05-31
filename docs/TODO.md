@@ -113,51 +113,59 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 
 ---
 
-## 6. Additional features (Innovation — 15%) [OPTIONAL but graded]
+## 6. Additional features (Innovation — 15%) [OPTIONAL but graded] — ✅ N-MIP DONE (2026-05-31)
 
-- [ ] **N MIP raster images in a single kernel call:** compute N MIP images with different rotations on the device with a **single** CUDA kernel call.
-- [ ] **Video generation:** generate a video from the N generated raster images using an external tool (e.g. `ffmpeg`).
+- [x] **N MIP raster images in a single kernel call:** `device_bunny_mip_multi` + `mip_multi_kernel` ([device-bunnyMIP.cu](../bunnyMIP/src/device-bunnyMIP.cu)). Threshold+blur run once; the blurred volume is reused; the **3D grid `(x,y,frame)`** renders all N MIPs in **one launch**, each frame using `c_Rmulti[f]` (N matrices in constant memory, `MAX_FRAMES=512`). CLI: `--frames N` sweeps one axis 0–360° (default yaw) → `output/frame_000.pgm…`. Per-frame math identical to the validated `mip_kernel`.
+  - Verified: single kernel call, different rotations, on-device — meets the brief. Caveats (documented in README §6): `frames` clamped to 512 (constant-mem bound); multi-MIP mode skips CPU validation (shares the validated projection math).
+- [~] **Video generation:** frames are written sequentially as `frame_%03d.pgm`; **`ffmpeg` is NOT on banana**, so the video is assembled **locally** after `sync-down.sh` (command documented in README §6). Optional: actually produce/commit a sample `bunny_spin.mp4`.
 
 ---
 
-## 7. Documentation — README.md (15%)
+## 7. Documentation — README.md (15%) — ✅ DONE (2026-05-31)
 
 > The README.md must live in the group's home directory on `banana.ua.pt` and document the architectural decisions and concurrency strategies.
+> Written in [bunnyMIP/README.md](../bunnyMIP/README.md) (this is the file that syncs to `~/bunnyMIP` on banana = the deliverable README). The root [README.md](../README.md) stays as the dev-workflow doc.
 
-- [ ] **Build and run instructions** for the application.
-- [ ] **Explanation of the developed CUDA kernels** (threshold, blur, MIP).
-- [ ] **Speedup analysis** of the code (execution-time comparisons).
-- [ ] Architectural decisions and concurrency strategies employed.
-- [ ] Usage details and a summary of the approach.
-- [ ] Any other information the group considers relevant.
-- [ ] Technical documentation quality (5%).
-- [ ] **IEEE-format citations** for any external code/concepts (zero-tolerance plagiarism policy).
+- [x] **Build and run instructions** for the application (§1: requirements, `make`, run from `~/bunnyMIP`, CLI table + examples).
+- [x] **Explanation of the developed CUDA kernels** (§3: threshold grid-stride, blur 8×8×8/constant weights, MIP 16×16/`c_R`/`__ldg`).
+- [x] **Speedup analysis** of the code (§5: σ sweep + rotation sweep tables, ~93–165× e2e / ~143–287× kernels, from `output/perf-results.txt`).
+- [x] Architectural decisions and concurrency strategies employed (§3 "concurrency strategy" + §6 design decisions + memory model).
+- [x] Usage details and a summary of the approach (§1 CLI + §2 pipeline overview).
+- [x] Any other information the group considers relevant (§7 transparency note on reference-code fixes).
+- [x] Technical documentation quality (5%) — structured, cross-linked, data-backed.
+- [x] **IEEE-format citations** for external code/concepts (§9: CUDA Guide, Stanford Bunny/Turk&Levoy, MIP/Wallis et al.).
 
----
-
-## 8. Shared-server etiquette (banana.ua.pt)
-
-- [ ] Responsible use of VRAM and CPU; do not leave large allocations active outside debugging.
-- [ ] **Do NOT use the VSCode Remote-SSH extension** (forbidden — Node.js zombie processes).
-- [ ] Edit with lightweight tools (vim/nano) **or** develop locally and sync via `scp`/`rsync`/Git/SFTP.
+> ⚠️ Pending when the §6 innovation feature lands: add an N-MIP / video section to the README and cite `ffmpeg` if used.
 
 ---
 
-## 9. Presentation (20%) — MANDATORY
+## 8. Shared-server etiquette (banana.ua.pt) — ✅ DONE (ongoing practice)
+
+- [x] Responsible use of VRAM and CPU; do not leave large allocations active outside debugging.
+  → every device run frees all `cudaMalloc` buffers before returning (`device_bunny_mip` / `device_bunny_mip_multi`).
+- [x] **Do NOT use the VSCode Remote-SSH extension** (forbidden — Node.js zombie processes). → never used; we develop locally.
+- [x] Edit with lightweight tools (vim/nano) **or** develop locally and sync via `scp`/`rsync`/Git/SFTP.
+  → local edit + [scripts/sync-up.sh](../scripts/sync-up.sh) (rsync, excludes `data/`) + Git.
+
+---
+
+## 9. Presentation (20%) — MANDATORY — ⏳ TODO (group task, not in repo)
 
 - [ ] Prepare the presentation (5 min): overview of the implemented CUDA kernels.
+  → source material ready: README §3 (kernels + concurrency) and §6 (innovation).
 - [ ] Prepare the live demo + Q&A (10 min): software demonstration and answers to technical questions.
+  → demo script: `./bunnyMIP --repeat 10` (speedup + validation), then `./bunnyMIP --frames 60` (single-kernel multi-MIP) + local `ffmpeg` spin video. Q&A prep: grid-stride, constant memory, `__ldg`, out-of-place blur, 3D grid for multi-MIP.
 - [ ] Total duration strictly limited to 15 minutes.
 
 ---
 
-## 10. Deliverable
+## 10. Deliverable — ⏳ MOSTLY READY (final sync + confirmation pending)
 
-- [ ] Ensure **all source files** are in the group's home directory on `banana.ua.pt`.
-- [ ] Include a `README.md` with setup, usage, and a summary of the approach.
-- [ ] Include the performance-analysis results (times + speedup).
-- [ ] Confirm delivery **before June 1, 09:00** (no late submissions accepted).
-- [ ] Ensure the codebase is the group's unique, original creation (academic integrity).
+- [x] Include a `README.md` with setup, usage, and a summary of the approach → [bunnyMIP/README.md](../bunnyMIP/README.md) (ships in `~/bunnyMIP`).
+- [x] Include the performance-analysis results (times + speedup) → [output/perf-results.txt](../output/perf-results.txt) + README §5 tables.
+- [x] Ensure the codebase is the group's unique, original creation (academic integrity) → original implementation; transparency note (README §8) on the reference-code fixes and `main.cpp` scope; IEEE citations (README §10).
+- [ ] Ensure **all source files** are in the group's home directory on `banana.ua.pt` → run `bash scripts/sync-up.sh` once more. It mirrors `bunnyMIP/` → `~/bunnyMIP` (excludes `data/`, `output/*`, `obj/`, the binary), so `README.md` and all sources are included. ⚠️ `--delete` mirrors: make sure nothing needed lives only on banana.
+- [ ] Confirm delivery **before June 1, 09:00** (no late submissions accepted) → **final check pending**.
 
 ---
 

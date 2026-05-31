@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -59,6 +60,9 @@ static void usage(const char* prog) {
     print("  --yaw D         yaw rotation in degrees   (default 0)\n");
     print("  --repeat N      timed CPU/GPU runs for the speedup analysis (default 1;\n");
     print("                  the first run is discarded as warm-up when N > 1)\n");
+    print("  --frames N      render N MIPs with different rotations in ONE CUDA kernel\n");
+    print("                  call; sweeps 0..360 deg on the axis whose --roll/--pitch/\n");
+    print("                  --yaw is nonzero (default yaw). Writes output/frame_XXX.pgm\n");
     print("  -h, --help      show this help and exit\n");
 }
 
@@ -72,6 +76,7 @@ int main(int argc, char* argv[]) {
     float    pitch     = 0.0f;
     float    yaw       = 0.0f;
     int      repeat    = 1;          // timed runs for the speedup analysis
+    int      frames    = 1;          // >1 -> multi-MIP: N rotations, 1 kernel call
 
     // ---- Parse the command line --------------------------------------------
     for (int i = 1; i < argc; ++i) {
@@ -105,6 +110,10 @@ int main(int argc, char* argv[]) {
             repeat = std::atoi(value("--repeat"));
             if (repeat < 1) { print("warning: --repeat must be >= 1; using 1\n"); repeat = 1; }
         }
+        else if (arg == "--frames") {
+            frames = std::atoi(value("--frames"));
+            if (frames < 1) { print("warning: --frames must be >= 1; using 1\n"); frames = 1; }
+        }
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else {
             print("error: unknown option '%s'\n", arg.c_str());
@@ -117,6 +126,46 @@ int main(int argc, char* argv[]) {
           (unsigned)threshold, sigma, roll, pitch, yaw);
 
     uint16_t* volume = loadBunnyCT("data");
+
+    // ---- Multi-MIP mode (Innovation #1): N rotations, single kernel call -----
+    if (frames > 1) {
+        // Pick the spin axis: whichever of roll/pitch/yaw is nonzero (yaw default).
+        const char* axis = "yaw";
+        if      (roll  != 0.0f) axis = "roll";
+        else if (pitch != 0.0f) axis = "pitch";
+        print("multi-MIP: %d frames, sweeping %s 0..360 deg in one kernel call\n",
+              frames, axis);
+
+        // Build N rotation matrices: frame f sets the chosen axis to f*360/N deg.
+        const int raster = kBunnySize * kBunnySize;
+        float* Rs = new float[(size_t)frames * 9];
+        for (int f = 0; f < frames; ++f) {
+            float ang = f * (360.0f / frames);
+            float rr = (axis[0] == 'r') ? ang : 0.0f;
+            float pp = (axis[0] == 'p') ? ang : 0.0f;
+            float yy = (axis[0] == 'y') ? ang : 0.0f;
+            generate_rotation_matrix(d2r(pp), d2r(yy), d2r(rr), Rs + (size_t)f * 9);
+        }
+
+        uint16_t* allframes = new uint16_t[(size_t)raster * frames];
+        float mip_ms = 0.0f;
+        device_bunny_mip_multi(volume, threshold, sigma, Rs, frames, allframes, &mip_ms);
+
+        // Save each frame as output/frame_XXX.pgm (input to the ffmpeg video).
+        for (int f = 0; f < frames; ++f) {
+            char name[64];
+            snprintf(name, sizeof(name), "output/frame_%03d.pgm", f);
+            savePGM16(name, allframes + (size_t)f * raster, kBunnySize, kBunnySize);
+        }
+        print("\n>> Multi-MIP done: %d frames, single kernel call: %.3f ms (%.3f ms/frame)\n",
+              frames, mip_ms, mip_ms / frames);
+        print("   wrote output/frame_000.pgm .. frame_%03d.pgm\n", frames - 1);
+
+        delete [] Rs;
+        delete [] allframes;
+        delete [] volume;
+        return 0;
+    }
 
     // Raster output when running on the host
     uint16_t* h_raster = new uint16_t[kBunnySize*kBunnySize];

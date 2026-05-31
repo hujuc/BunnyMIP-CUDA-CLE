@@ -206,50 +206,39 @@ The graded innovation feature computes **N MIP images at different rotations on 
 device with one CUDA kernel call**, then turns them into a rotating animation.
 
 ### How it works
-- A second device entry point, `device_bunny_mip_multi()`, runs the **threshold and
-  blur once** and reuses the single blurred volume for every frame — the per-frame
-  work is purely the projection.
-- The N rotation matrices are uploaded together to constant memory
-  (`c_Rmulti[MAX_FRAMES*9]`, with `MAX_FRAMES = 512`; 512·9 floats ≈ 18 KB, well
-  within the 64 KB constant space).
-- A **single launch** of `mip_multi_kernel` uses a **3D grid** `(x, y, frame)`: the
-  block z-dimension indexes the frame, so the existing 16×16 pixel tiling is reused
-  and the frame axis is just extra grid layers. Thread `(x,y,f)` casts pixel `(x,y)`
-  of frame `f` through the shared volume using `c_Rmulti[f]` and writes into that
-  frame's slice of a `frames·N·N` output buffer. Each ray is independent — no
-  atomics, no synchronisation.
-- Per-frame MIP arithmetic is **identical** to the validated single-frame
-  `mip_kernel` (same ray range, offsets, `__ldg`, nearest-neighbour truncation), so
-  every frame matches what the standard pipeline would produce for that angle.
 
-The `main.cpp` driver (mode entered when `--frames N > 1`) builds N matrices that
-sweep one axis over 0–360° — whichever of `--roll`/`--pitch`/`--yaw` is non-zero
-(default **yaw**) — and saves the stack as `output/frame_000.pgm` … `frame_{N-1}.pgm`.
-Only the multi-MIP kernel is timed (CUDA events), reported as total and per-frame.
+- A second device entry point, `device_bunny_mip_multi()`, runs the threshold and blur once and reuses the single blurred volume for every frame.
+- The N rotation matrices are uploaded together to constant memory (`c_Rmulti[MAX_FRAMES*9]`, with `MAX_FRAMES = 512`; 512·9 floats ≈ 18 KB, well within the 64 KB constant space).
+- A single launch of `mip_multi_kernel` uses a 3D grid `(x, y, frame)`: the block z-dimension indexes the frame, so the existing 16×16 pixel tiling is reused and the frame axis is just extra grid layers. Thread `(x,y,f)` casts pixel `(x,y)` of frame `f` through the shared volume using `c_Rmulti[f]` and writes into that frame's slice of a `frames·N·N` output buffer. Each ray is independent, so, no atomics, no synchronisation.
+- Per-frame MIP arithmetic is identical to the validated single-frame `mip_kernel` (same ray range, offsets, `__ldg`, nearest-neighbour truncation), so every frame matches what the standard pipeline would produce for that angle.
+
+The `main.cpp` driver (mode entered when `--frames N > 1`) builds the N matrices on the host. `--axis {roll|pitch|yaw}` selects the axis swept over 0-360° (default yaw); the `--roll`/`--pitch`/`--yaw` values on the other two axes define a fixed tilt that orients the spin axis, so the result can be a tilted orbit rather than a flat turntable. Each frame's matrix is the composition `R_frame(f) = R_tilt · R_spin(f)` (a 3×3 `matmul3`), and the stack is saved as `output/frame_000.pgm` … `frame_{N-1}.pgm`. Only the multi-MIP kernel is timed (CUDA events), reported as total and per-frame.
 
 ```bash
 # 60-frame yaw spin, all rendered in ONE kernel call:
-./bunnyMIP --frames 60
+./bunnyMIP --frames 60 --axis yaw
 # spin about a different axis (e.g. pitch):
-./bunnyMIP --frames 60 --pitch 1     # any non-zero pitch selects the pitch axis
+./bunnyMIP --frames 60 --axis pitch
+# tilted orbit: spin yaw, but tilt the axis 30° in pitch:
+./bunnyMIP --frames 60 --axis yaw --pitch 30
 ```
 
 ### Video generation
-`ffmpeg` is **not installed on banana**, so the frames are rendered on the server and
-the video is assembled **locally** after pulling them back:
+The N frames are encoded into a rotating animation with FFmpeg [4]. Because FFmpeg is not installed on `banana`, a self-contained static FFmpeg build is kept in [`viz/`](viz/) on the server (downloaded once, not redistributed with this project)
 
 ```bash
-bash scripts/sync-down.sh            # pulls output/ (incl. frame_*.pgm) from banana
-# then, locally:
-ffmpeg -framerate 30 -i output/frame_%03d.pgm \
-       -vf format=gray16le,format=gray -pix_fmt yuv420p output/bunny_spin.mp4
+# 1) render the N frames (single kernel call) -> output/frame_000.pgm ...
+./bunnyMIP --frames 120 --axis yaw
+./bunnyMIP --frames 120 --axis yaw --pitch 30   # tilted orbit (optional)
+
+# 2) encode the frames into output/bunny-spin.mp4 (FPS default 30)
+bash viz/make-video.sh 30
 ```
+`viz/make-video.sh` uses the static `viz/ffmpeg` (downloading it once if absent), contrast-normalises the 16-bit frames to 8-bit during encoding (`-vf normalize`) so the bunny is visible, and sets `-pix_fmt yuv420p` to keep the H.264 output broadly playable. The result is `output/bunny-spin.mp4`.
 
 ### Notes / limits
-- `frames` is **clamped to `MAX_FRAMES = 512`** on the device (constant-memory bound).
-  Requesting more renders only the first 512; keep `--frames ≤ 512`.
-- Multi-MIP mode does not run the CPU validation path (it shares the already-validated
-  projection math); the standard single-frame mode remains the validated reference.
+- `frames` is **clamped to `MAX_FRAMES = 512`** on the device(constant-memory bound). Requesting more renders only the first 512; keep `--frames ≤ 512`.
+- Multi-MIP mode does not run the CPU validation path (it shares the already-validated projection math); the standard single-frame mode remains the validated reference.
 
 ---
 
@@ -332,4 +321,5 @@ Helper scripts (in [`../scripts/`](../scripts/)): `sync-up.sh` (push code to ban
 
 [4] FFmpeg Project, *FFmpeg: A complete, cross-platform solution to record, convert
     and stream audio and video*. [Online]. Available: https://ffmpeg.org/
+    Static Linux build (GPL) by J. Van Sickle, https://johnvansickle.com/ffmpeg/
 

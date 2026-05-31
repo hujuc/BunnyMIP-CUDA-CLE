@@ -5,5 +5,6 @@ set -e
 cd "$(dirname "$0")/.."
 rsync -az --delete \
   --exclude 'data/' --exclude 'output/*' --exclude 'obj/' --exclude '*.d' --exclude 'bunnyMIP' \
+  --exclude 'viz/ffmpeg' \
   ./bunnyMIP/ banana:bunnyMIP/
 echo "codigo sincronizado -> banana:bunnyMIP/ (data/ preservado)"

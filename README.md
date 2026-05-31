@@ -56,9 +56,16 @@ bash scripts/sync-up.sh
 # 3) build and run on banana (accepts CLI args)
 bash scripts/build-run.sh [--threshold N --sigma S --roll R --pitch P --yaw Y]
 
-# 4) (optional) full speedup sweep, then pull the results back locally
-bash scripts/bench.sh 10
+# 4) bring the result images back and view them (output/bunnyMIP_{cpu,gpu}.pgm)
 bash scripts/sync-down.sh
+
+# 5) speedup analysis: sweeps sigma/rotations, writes output/perf-results.txt
+bash scripts/bench.sh [REPEAT]            # REPEAT default = 10
+
+# 6) spinning-bunny video: N MIPs in ONE kernel call (Innovation) -> bunny-spin.mp4
+#    --axis picks the spin axis; --tilt-* tilt it into an orbit
+bash scripts/make-video.sh --frames 120 --fps 30 --axis yaw
+bash scripts/make-video.sh --frames 120 --fps 30 --axis yaw --tilt-pitch 30   # tilted orbit
 ```
 
 See [bunnyMIP/README.md](bunnyMIP/README.md) for the complete CLI (incl. `--repeat`
@@ -71,6 +78,7 @@ and the `--frames` innovation mode) and the local `ffmpeg` step for the spin vid
 | [scripts/sync-down.sh](scripts/sync-down.sh) | `rsync` the results (`output/`) banana → local. |
 | [scripts/build-run.sh](scripts/build-run.sh) | Build with `nvcc` and run on banana. |
 | [scripts/bench.sh](scripts/bench.sh) | Speedup sweep on banana → `output/perf-results.txt`. |
+| [scripts/make-video.sh](scripts/make-video.sh) | Orchestrates the rotation video: generate N frames on banana, encode via `bunnyMIP/viz/`, fetch `bunny-spin.mp4` back. |
 
 ## Status
 

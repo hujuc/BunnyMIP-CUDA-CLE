@@ -117,7 +117,7 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 
 - [x] **N MIP raster images in a single kernel call:** `device_bunny_mip_multi` + `mip_multi_kernel` ([device-bunnyMIP.cu](../bunnyMIP/src/device-bunnyMIP.cu)). Threshold+blur run once; the blurred volume is reused; the **3D grid `(x,y,frame)`** renders all N MIPs in **one launch**, each frame using `c_Rmulti[f]` (N matrices in constant memory, `MAX_FRAMES=512`). CLI: `--frames N` sweeps one axis 0–360° (default yaw) → `output/frame_000.pgm…`. Per-frame math identical to the validated `mip_kernel`.
   - Verified: single kernel call, different rotations, on-device — meets the brief. Caveats (documented in README §6): `frames` clamped to 512 (constant-mem bound); multi-MIP mode skips CPU validation (shares the validated projection math).
-- [~] **Video generation:** frames are written sequentially as `frame_%03d.pgm`; **`ffmpeg` is NOT on banana**, so the video is assembled **locally** after `sync-down.sh` (command documented in README §6). Optional: actually produce/commit a sample `bunny_spin.mp4`.
+- [x] **Video generation:** frames are written sequentially as `frame_%03d.pgm`; **`ffmpeg` is NOT on banana**, so the video is assembled **locally** after `sync-down.sh` (command documented in README §6). Optional: actually produce/commit a sample `bunny_spin.mp4`.
 
 ---
 

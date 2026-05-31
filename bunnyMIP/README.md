@@ -52,6 +52,7 @@ validation result, and saves:
 | `--yaw D` | Yaw rotation in **degrees**. | `0` |
 | `--repeat N` | Timed CPU/GPU runs for the speedup analysis. With `N>1` the first run is discarded as CUDA warm-up. | `1` |
 | `--frames N` | **Innovation mode:** render N MIPs at evenly-spaced rotations (0–360°) in a **single** kernel call. Writes `output/frame_000.pgm`…. See §6. | `1` |
+| `--axis A` | Multi-MIP only: which axis sweeps 0–360° — `roll`\|`pitch`\|`yaw`. The `--roll`/`--pitch`/`--yaw` values on the other two axes set a fixed tilt (orbit). | `yaw` |
 | `-h`, `--help` | Show usage and exit. | — |
 
 The rotation angles are combined into a 3×3 rotation matrix `R = Rz·Ry·Rx` that

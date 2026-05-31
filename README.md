@@ -36,13 +36,25 @@ bash scripts/sync-up.sh
 
 # 3) build and run on banana (accepts CLI args)
 bash scripts/build-run.sh [--threshold N --sigma S --roll R --pitch P --yaw Y]
+
+# 4) bring the result images back and view them (output/bunnyMIP_{cpu,gpu}.pgm)
+bash scripts/sync-down.sh
+
+# 5) speedup analysis: sweeps sigma/rotations, writes output/perf-results.txt
+bash scripts/bench.sh [REPEAT]            # REPEAT default = 10
+
+# 6) spinning-bunny video: N MIPs in one kernel call -> bunny-spin.mp4
+bash scripts/make-video.sh --frames 120 --fps 30
 ```
 
 | Script | Purpose |
 |---|---|
 | [scripts/vpn-up.sh](scripts/vpn-up.sh) | Fixes the VPN after connecting (split tunnel + DNS + NAT). Run on **every** connection. |
 | [scripts/sync-up.sh](scripts/sync-up.sh) | `rsync` the local code → banana (excludes the dataset). |
+| [scripts/sync-down.sh](scripts/sync-down.sh) | `rsync` the results (`output/`) banana → local. |
 | [scripts/build-run.sh](scripts/build-run.sh) | Build with `nvcc` and run on banana. |
+| [scripts/bench.sh](scripts/bench.sh) | Speedup analysis sweep → Markdown tables in `output/perf-results.txt`. |
+| [scripts/make-video.sh](scripts/make-video.sh) | Orchestrates the rotation video: generate N frames on banana, encode via `bunnyMIP/viz/`, fetch `bunny-spin.mp4` back. |
 
 ## Status
 

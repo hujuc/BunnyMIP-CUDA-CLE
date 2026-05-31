@@ -115,8 +115,8 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 
 ## 6. Additional features (Innovation — 15%) [OPTIONAL but graded]
 
-- [ ] **N MIP raster images in a single kernel call:** compute N MIP images with different rotations on the device with a **single** CUDA kernel call.
-- [ ] **Video generation:** generate a video from the N generated raster images using an external tool (e.g. `ffmpeg`).
+- [x] **N MIP raster images in a single kernel call:** compute N MIP images with different rotations on the device with a **single** CUDA kernel call.
+- [x] **Video generation:** generate a video from the N generated raster images using an external tool (e.g. `ffmpeg`).
 
 ---
 

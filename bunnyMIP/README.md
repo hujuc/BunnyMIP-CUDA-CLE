@@ -269,7 +269,7 @@ The `main.cpp` driver (mode entered when `--frames N > 1`) builds the N matrices
 ```
 
 ### Video generation
-The N frames are encoded into a rotating animation with FFmpeg [4]. Because FFmpeg is not installed on `banana`, a self-contained static FFmpeg build is kept in [`viz/`](viz/) on the server (downloaded once, not redistributed with this project)
+The N frames are encoded into a rotating animation with FFmpeg [6]. Because FFmpeg is not installed on `banana`, a self-contained static FFmpeg build is kept in [`viz/`](viz/) on the server (downloaded once, not redistributed with this project).
 
 ```bash
 # 1) render the N frames (single kernel call) -> output/frame_000.pgm ...

@@ -21,6 +21,25 @@ static bool perf_enabled()
     return v == 1;
 }
 
+// Separable-blur experiment toggle: BUNNY_SEPARABLE=1 swaps the 27-tap tiled
+// blur for three 1D passes (X->Y->Z). Off by default (keeps bit-exact blur).
+static bool separable_enabled()
+{
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("BUNNY_SEPARABLE"); v = (e && *e && *e != '0'); }
+    return v == 1;
+}
+
+// Naive-blur toggle: BUNNY_BLUR_NAIVE=1 uses the original global-memory 27-tap
+// blur_kernel (no shared-memory tiling) — the pre-optimization baseline, kept
+// for before/after comparison. Off by default (tiled blur is the default).
+static bool blur_naive_enabled()
+{
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("BUNNY_BLUR_NAIVE"); v = (e && *e && *e != '0'); }
+    return v == 1;
+}
+
 // Scoped CUDA-event stopwatch: times the GPU work between start() and stop()
 // and prints "[perf] <label>: X.XXX ms" when perf is enabled. A no-op otherwise.
 struct GpuTimer {
@@ -78,6 +97,11 @@ static void perf_launch(const char* label, const void* kernel,
 //   c_R       - the flattened 3x3 rotation matrix
 __constant__ float c_weights[27];
 __constant__ float c_R[9];
+
+// Separable-blur experiment (BUNNY_SEPARABLE=1): the 3-tap normalized 1D Gaussian
+// applied independently along X, then Y, then Z. NB: a separable pass truncates
+// to uint16 between axes, so the result is NOT bit-identical to the 27-tap blur.
+__constant__ float c_weights1d[3];
 
 // Innovation #1: up to MAX_FRAMES rotation matrices for the multi-MIP kernel,
 // stored back-to-back (matrix f at c_Rmulti + f*9). Constant memory is 64 KB;
@@ -193,6 +217,32 @@ __global__ void blur_kernel_tiled(const uint16_t* __restrict__ input,
 }
 
 // =============================================================================
+// Kernel 2c - Separable Gaussian: one 1D 3-tap pass along `axis` (0=x,1=y,2=z).
+// Applied X->Y->Z replaces the 27-tap blur with 3x3-tap passes (9 ops vs 27).
+// Each pass truncates to uint16, so the result differs slightly from the 27-tap
+// blur (per-pass rounding) — measured as an experiment, not the default.
+// =============================================================================
+__global__ void blur1d_kernel(const uint16_t* __restrict__ input,
+                              uint16_t* __restrict__ output, int N, int M, int axis)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+    if (x >= N || y >= N || z >= M) return;
+
+    float acc = 0.0f;
+    for (int d = -1; d <= 1; ++d) {
+        int nx = x, ny = y, nz = z;
+        if      (axis == 0) nx = clampi(x + d, 0, N - 1);
+        else if (axis == 1) ny = clampi(y + d, 0, N - 1);
+        else                nz = clampi(z + d, 0, M - 1);
+        uint16_t voxel = __ldg(&input[(size_t)nz * N * N + ny * N + nx]);
+        acc += (float)voxel * c_weights1d[d + 1];
+    }
+    output[(size_t)z * N * N + y * N + x] = (uint16_t)acc;
+}
+
+// =============================================================================
 // Kernel 3 - Maximum Intensity Projection (MIP).
 // One thread per output pixel: cast a ray (rotated by c_R) through the volume
 // and keep the maximum voxel intensity (nearest-neighbor sampling).
@@ -287,6 +337,13 @@ static void upload_gaussian_weights(float sigma)
     for (int i = 0; i < 27; ++i) weights[i] /= sum;
 
     CUDA_CHECK(cudaMemcpyToSymbol(c_weights, weights, sizeof(weights)));
+
+    // 1D Gaussian (3-tap) for the separable experiment: g(d)=exp(-d^2/2s^2),
+    // normalized so the three taps sum to 1.
+    float w1[3], s1 = 0.0f;
+    for (int d = -1; d <= 1; ++d) { w1[d + 1] = std::exp(-(float)(d * d) / (2.0f * sigma * sigma)); s1 += w1[d + 1]; }
+    for (int i = 0; i < 3; ++i) w1[i] /= s1;
+    CUDA_CHECK(cudaMemcpyToSymbol(c_weights1d, w1, sizeof(w1)));
 }
 
 // =============================================================================
@@ -387,11 +444,28 @@ void device_bunny_mip(const uint16_t* input, uint16_t threshold,
         dim3 grid((N + block.x - 1) / block.x,
                   (N + block.y - 1) / block.y,
                   (M + block.z - 1) / block.z);
-        perf_launch("blur", (const void*)blur_kernel_tiled, grid, block);
-        t.start();
-        blur_kernel_tiled<<<grid, block>>>(d_volume, d_blurred, N, M);
-        CUDA_CHECK(cudaGetLastError());
-        t.stop("blur");
+        if (separable_enabled()) {
+            // 3 passes X->Y->Z, ping-pong ending in d_blurred (same as tiled).
+            perf_launch("blur(sep)", (const void*)blur1d_kernel, grid, block);
+            t.start();
+            blur1d_kernel<<<grid, block>>>(d_volume,  d_blurred, N, M, 0); // X
+            blur1d_kernel<<<grid, block>>>(d_blurred, d_volume,  N, M, 1); // Y
+            blur1d_kernel<<<grid, block>>>(d_volume,  d_blurred, N, M, 2); // Z
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur(sep)");
+        } else if (blur_naive_enabled()) {
+            perf_launch("blur(naive)", (const void*)blur_kernel, grid, block);
+            t.start();
+            blur_kernel<<<grid, block>>>(d_volume, d_blurred, N, M);
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur(naive)");
+        } else {
+            perf_launch("blur", (const void*)blur_kernel_tiled, grid, block);
+            t.start();
+            blur_kernel_tiled<<<grid, block>>>(d_volume, d_blurred, N, M);
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur");
+        }
     }
 
     // Step 3: MIP Projection (d_blurred -> d_raster).
@@ -492,11 +566,27 @@ void device_bunny_mip_multi(const uint16_t* input, uint16_t threshold,
         dim3 grid((N + block.x - 1) / block.x,
                   (N + block.y - 1) / block.y,
                   (M + block.z - 1) / block.z);
-        perf_launch("blur", (const void*)blur_kernel_tiled, grid, block);
-        t.start();
-        blur_kernel_tiled<<<grid, block>>>(d_volume, d_blurred, N, M);
-        CUDA_CHECK(cudaGetLastError());
-        t.stop("blur");
+        if (separable_enabled()) {
+            perf_launch("blur(sep)", (const void*)blur1d_kernel, grid, block);
+            t.start();
+            blur1d_kernel<<<grid, block>>>(d_volume,  d_blurred, N, M, 0); // X
+            blur1d_kernel<<<grid, block>>>(d_blurred, d_volume,  N, M, 1); // Y
+            blur1d_kernel<<<grid, block>>>(d_volume,  d_blurred, N, M, 2); // Z
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur(sep)");
+        } else if (blur_naive_enabled()) {
+            perf_launch("blur(naive)", (const void*)blur_kernel, grid, block);
+            t.start();
+            blur_kernel<<<grid, block>>>(d_volume, d_blurred, N, M);
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur(naive)");
+        } else {
+            perf_launch("blur", (const void*)blur_kernel_tiled, grid, block);
+            t.start();
+            blur_kernel_tiled<<<grid, block>>>(d_volume, d_blurred, N, M);
+            CUDA_CHECK(cudaGetLastError());
+            t.stop("blur");
+        }
     }
 
     // Step 3: Multi-MIP in ONE launch (3D grid: x, y, frame). Timed via events.

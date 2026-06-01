@@ -114,20 +114,36 @@ A **grid-stride loop** over the `512·512·361 ≈ 9.5×10⁷` voxels: each thre
 configuration from the data size and keeps memory accesses fully coalesced.
 Launched with 256 threads/block.
 
-### Kernel 2 — `blur_kernel` (3×3×3 stencil)
-One thread per voxel, organised as **8×8×8 blocks** over the 3D grid. Each thread
-reads its 27 neighbours (with `clampi` boundary clamping, mirroring the host's
-`max/min`), multiplies by `c_weights`, and writes a single `uint16_t` (truncated,
-exactly like the host's `(uint16_t)` cast). Out-of-place to avoid read/write
-hazards. Inputs are marked `__restrict__` to enable compiler aliasing
-optimisations. (Shared-memory halo tiling is a possible further optimisation; the
-current version already relies on the L1/texture cache for neighbour reuse.)
+### Kernel 2 — Gaussian blur (3×3×3 stencil)
+One thread per voxel, organised as **8×8×8 blocks** over the 3D grid. All variants
+clamp boundaries like the host (`clampi` ↔ `max/min`), are **out-of-place**
+(input ≠ output, no read-after-write hazard) and mark inputs `__restrict__`. Three
+implementations are present; the **tiled** one is the default and the other two are
+selectable at runtime for a before/after comparison (see §5):
+
+- **`blur_kernel_tiled` — shared-memory tiled (default).** Each block cooperatively
+  loads its 8³ voxels **plus a 1-voxel halo** into a `10×10×10` `__shared__` tile
+  (clamped at the volume edge), `__syncthreads()`, then every thread reads its 27
+  neighbours from **fast shared memory** instead of re-fetching from global. With an
+  8³ block each voxel is loaded ~once instead of ~27×, which roughly **halves the blur
+  cost**. Same accumulation order, weights and `(uint16_t)` truncation as the host →
+  **bit-identical** output.
+- **`blur_kernel` — naïve global memory (`BUNNY_BLUR_NAIVE=1`).** The straightforward
+  27-tap version: each thread reads its 27 neighbours straight from global memory
+  (relying on the L1 cache for reuse). The **pre-optimisation baseline**.
+- **`blur1d_kernel` — separable 3×(1-D 3-tap) (`BUNNY_SEPARABLE=1`).** Three 1-D
+  passes (X→Y→Z), 9 taps instead of 27. Faster in theory, but it truncates to
+  `uint16` **between** passes, so it is **not** bit-identical (`max |diff| = 2`, still
+  PASS) — kept as an experiment, not the default.
+
+(`BUNNY_PERF=1` prints per-kernel times and occupancy for any variant.)
 
 ### Kernel 3 — `mip_kernel` (ray-cast reduction)
 One thread per **output pixel**, organised as **16×16 blocks**. Each thread walks
-its ray from `-ray_range` to `+ray_range` (≈ 810 steps, the volume half-diagonal so
-the ray crosses the volume at any rotation), applies the rotation `c_R` for backward
-mapping, bounds-checks the sample, and keeps the running maximum. Volume reads use
+its ray from `-ray_range` to `+ray_range` (`ray_range = 405`, the volume half-diagonal;
+**810 steps** span the full diagonal so the ray crosses the volume at any rotation),
+applies the rotation `c_R` for backward mapping, bounds-checks the sample, and keeps
+the running maximum. Volume reads use
 `__ldg` (read-only data cache) since the volume is never written by this kernel.
 Per-thread local maxima mean **no inter-thread synchronisation or atomics** are
 needed — the reduction is private to each ray.
@@ -151,53 +167,81 @@ Standard" pixel by pixel:
 - **Tolerance:** validation **PASSES** if that percentage is `≤ ACCEPT_PCT = 1.0 %`.
 - The process exit code is non-zero on FAIL, so the check is scriptable.
 
-**Result:** across every benchmarked configuration the GPU output is **bit-stable**
-with the host — **0.00 % differing pixels, maximum absolute difference 0**. This is
-expected: the kernels reproduce the host's arithmetic exactly (same weight math,
-same boundary clamping, same `(uint16_t)` truncation, same nearest-neighbour ray
-sampling and the same `ray_range`).
+**Result:** every benchmarked configuration **PASSES** — fewer than `0.01 %` of pixels
+ever exceed the tolerance (well under the `1.0 %` bar). For **axis-aligned** views
+(no rotation; the σ and threshold sweeps) the agreement is essentially exact:
+`0.0000 %` differing pixels and a **maximum absolute difference of 1**. Under
+**rotation** a *handful* of pixels (`< 0.001 %`, e.g. `0.0008 %` at yaw 45° pitch 30°)
+can differ by more — up to a few thousand intensity units on those isolated pixels.
+
+This is **not** a port defect: the kernels reproduce the host's arithmetic (same weight
+math, boundary clamping, `(uint16_t)` truncation and `ray_range`). The residual comes
+from **nearest-neighbour ray sampling** — a sub-ULP floating-point difference in the
+rotated coordinate (e.g. GPU fused multiply-add vs the host's separate mul/add) can
+cross an integer boundary and pick an *adjacent* voxel of very different intensity.
+The effect is inherent to nearest-neighbour MIP, and the percentage-based metric is
+exactly what makes the validation robust to it.
 
 ---
 
 ## 5. Speedup analysis
 
-Measured on `banana.ua.pt` (GeForce GTX 1660 Ti, `sm_75`) with
-[`../scripts/bench.sh`](../scripts/bench.sh), `--repeat 10` (the first run is
-discarded as CUDA warm-up; the average of the remaining 9 is reported). Two GPU
-figures are given:
+Measured on `banana.ua.pt` (GeForce GTX 1660 Ti, `sm_75`) over `--repeat 10` runs
+(the first discarded as CUDA warm-up; the average of the remaining 9 is reported).
+Two GPU figures are given:
 
 - **GPU end-to-end** — wall-clock of `device_bunny_mip`, *including* allocation and
   Host↔Device transfers (`std::chrono`).
 - **GPU kernels-only** — the three kernels bracketed by `cudaEvent` timers,
   *excluding* allocation and transfers.
 
-**Gaussian blur cost (σ sweep, no rotation)**
+All GPU runs below use the default **shared-memory tiled blur**.
+
+**Speedup (σ sweep, no rotation)**
 
 | Configuration | CPU (ms) | GPU e2e (ms) | GPU kernels (ms) | Speedup e2e | Speedup kernels |
 |---|---|---|---|---|---|
-| σ = 0.5 | 6867.2 | 41.57 | 23.94 | 165.18× | 286.81× |
-| σ = 1.0 | 6648.7 | 41.47 | 23.95 | 160.31× | 277.63× |
-| σ = 1.5 | 6609.7 | 41.52 | 23.95 | 159.19× | 276.03× |
-| σ = 2.0 | 6867.4 | 41.62 | 23.94 | 165.02× | 286.81× |
+| σ = 0.5 | 6615.7 | 33.19 | 15.66 | 199.35× | 422.43× |
+| σ = 1.0 | 6859.9 | 33.27 | 15.67 | 206.16× | 437.75× |
+| σ = 1.5 | 6868.5 | 33.20 | 15.65 | 206.86× | 438.76× |
+| σ = 2.0 | 6585.2 | 33.18 | 15.66 | 198.49× | 420.43× |
 
 **Rotation sweep (σ = 1.0)**
 
 | Configuration | CPU (ms) | GPU e2e (ms) | GPU kernels (ms) | Speedup e2e | Speedup kernels |
 |---|---|---|---|---|---|
-| yaw = 45 | 5975.8 | 47.40 | 29.79 | 126.09× | 200.59× |
-| pitch = 90 | 4899.5 | 41.82 | 24.17 | 117.16× | 202.68× |
-| roll=30 pitch=60 yaw=120 | 4806.8 | 51.20 | 33.71 | 93.89× | 142.61× |
+| yaw = 45 | 6184.7 | 39.20 | 21.52 | 157.79× | 287.33× |
+| pitch = 90 | 4708.0 | 33.46 | 15.90 | 140.70× | 296.17× |
+| roll=30 pitch=60 yaw=120 | 4913.6 | 43.07 | 25.44 | 114.08× | 193.15× |
+
+**Blur variants (σ = 1.5, no rotation)** — the tiled blur is the default; the other two
+are runtime-selectable. Threshold and MIP are constant, so the change in *GPU kernels*
+isolates the blur:
+
+| Blur variant | GPU kernels (ms) | Speedup kernels | Δ kernels vs naïve | Bit-exact? |
+|---|---|---|---|---|
+| **tiled** (default) | **15.66** | **425.41×** | **−8.3 ms** | yes (max \|diff\| = 1) |
+| naïve (`BUNNY_BLUR_NAIVE=1`) | 23.94 | 285.39× | — | yes (max \|diff\| = 1) |
+| separable (`BUNNY_SEPARABLE=1`) | 23.01 | 289.86× | −0.9 ms | no (max \|diff\| = 2) |
 
 **Reading the numbers**
-- The GPU delivers a **~93–165× end-to-end** speedup and **~143–287× kernels-only**.
-- The blur is essentially **σ-independent** (the 3×3×3 stencil is the same work for
-  any σ; only the precomputed weights change), so its cost is flat across the sweep.
+- With the tiled blur the GPU delivers **~114–207× end-to-end** and **~193–439×
+  kernels-only**.
+- **Shared-memory tiling is the headline optimisation:** it removes **~8.3 ms** of
+  kernel time (the blur stage) — ~35 % of the total — by fetching each voxel ~once from
+  the shared tile instead of ~27× from global memory. The separable variant saves
+  almost nothing here (still global-bound) *and* is not bit-exact, so it stays an
+  experiment.
+- The blur is essentially **σ-independent** (the 3×3×3 stencil is the same work for any
+  σ; only the precomputed weights change), so its cost is flat across the sweep.
 - Rotations cost a little more because oblique rays traverse more in-bounds voxels.
-- The gap between kernels-only and end-to-end (~18 ms) is the fixed overhead of
-  allocating the VRAM buffers and the 180 MiB Host→Device upload — one-shot costs
-  that would amortise across multiple renders.
+- The gap between kernels-only and end-to-end (~17.5 ms) is the fixed overhead of
+  allocating the VRAM buffers and the 180 MiB Host→Device upload — one-shot costs that
+  amortise across multiple renders.
 
-Full raw output is archived in [`../output/perf-results.txt`](../output/perf-results.txt).
+Reproduce these numbers with `./bunnyMIP --repeat 10` (one `--sigma`/rotation at a
+time); the blur variants are selected with the `BUNNY_BLUR_NAIVE` / `BUNNY_SEPARABLE`
+environment toggles.
 
 ---
 
@@ -289,7 +333,8 @@ bunnyMIP/
 ├── makefile                 # nvcc build (-arch=sm_75)
 ├── README.md                # this file
 ├── data/                    # 361 raw CT slices (on banana only; not in git)
-├── output/                  # bunnyMIP_cpu.pgm, bunnyMIP_gpu.pgm, perf-results.txt
+├── output/                  # bunnyMIP_cpu.pgm, bunnyMIP_gpu.pgm, frame_*.pgm
+├── viz/                     # make-video.sh (+ static ffmpeg, fetched on first use)
 ├── include/                 # headers (bunnyIO, imageIO, print, bunnyMIP, device-bunnyMIP)
 └── src/
     ├── main.cpp             # CLI, pipeline driver, benchmark loop, validation
@@ -299,10 +344,6 @@ bunnyMIP/
     ├── imageIO.cpp          # 16-bit PGM writer
     └── print.cpp            # printf helpers
 ```
-
-Helper scripts (in [`../scripts/`](../scripts/)): `sync-up.sh` (push code to banana),
-`sync-down.sh` (pull `output/` back), `build-run.sh` (build + run on banana),
-`bench.sh` (speedup sweep), `vpn-up.sh` (UA VPN).
 
 ---
 

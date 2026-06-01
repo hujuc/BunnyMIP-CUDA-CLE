@@ -151,11 +151,10 @@ Full write-up: [docs/BASE-CODE-ANALYSIS.md](BASE-CODE-ANALYSIS.md).
 
 ## 9. Presentation (20%) — MANDATORY — ⏳ TODO (group task, not in repo)
 
-- [ ] Prepare the presentation (5 min): overview of the implemented CUDA kernels.
-  → source material ready: README §3 (kernels + concurrency) and §6 (innovation).
-- [ ] Prepare the live demo + Q&A (10 min): software demonstration and answers to technical questions.
-  → demo script: `./bunnyMIP --repeat 10` (speedup + validation), then `./bunnyMIP --frames 60` (single-kernel multi-MIP) + local `ffmpeg` spin video. Q&A prep: grid-stride, constant memory, `__ldg`, out-of-place blur, 3D grid for multi-MIP.
-- [ ] Total duration strictly limited to 15 minutes.
+- [X] Prepare the presentation (5 min): overview of the implemented CUDA kernels.  
+    → source material ready: README §3 (kernels + concurrency) and §6 (innovation).  
+    → Prepare the live demo + Q&A (10 min): software demonstration and answers to technical questions.  
+    → demo script: `./bunnyMIP --repeat 10` (speedup + validation), then `./bunnyMIP --frames 60`    (single-kernel multi-MIP) + local `ffmpeg` spin video. Q&A prep: grid-stride, constant memory, `__ldg`, out-of-place blur, 3D grid for multi-MIP. Total duration strictly limited to 15 minutes.
 
 ---
 
